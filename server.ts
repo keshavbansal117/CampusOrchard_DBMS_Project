@@ -33,6 +33,17 @@ async function startServer() {
     }
   });
 
+  app.put('/api/halls/:id', (req, res) => {
+    try {
+      const { name, capacity, location, status } = req.body;
+      const stmt = db.prepare("UPDATE Resource SET Name = ?, Capacity = ?, Location = ?, Status = ?, UpdatedByAdminID = ? WHERE ResourceID = ?");
+      stmt.run(name, capacity, location, status, 1, req.params.id);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   app.get('/api/users', (req, res) => {
     try {
       const users = db.prepare(`

@@ -44,6 +44,8 @@ export default function App() {
   // Modal states
   const [isAddHallModalOpen, setIsAddHallModalOpen] = useState(false);
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
+  const [editingHall, setEditingHall] = useState<any>(null);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -118,6 +120,34 @@ export default function App() {
     }
   };
 
+  const handleEditHallSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const data = {
+      name: formData.get('name'),
+      capacity: parseInt(formData.get('capacity') as string),
+      location: formData.get('location'),
+      status: formData.get('status'),
+    };
+
+    try {
+      const res = await fetch(`/api/halls/${editingHall.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      const responseData = await res.json();
+      if (!responseData.success) {
+        alert("Error editing hall: " + responseData.error);
+        return;
+      }
+      setEditingHall(null);
+      fetchData();
+    } catch (err: any) {
+      alert("Error: " + err.message);
+    }
+  };
+
   const handleCreateBooking = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -163,7 +193,7 @@ export default function App() {
       case 'dashboard':
         return <DashboardView halls={filteredHalls} bookings={filteredBookings} users={filteredUsers} currentRole={currentRole} />;
       case 'halls':
-        return <HallsView halls={filteredHalls} currentRole={currentRole} onAddHall={() => setIsAddHallModalOpen(true)} onRequestBooking={() => setIsBookingModalOpen(true)} />;
+        return <HallsView halls={filteredHalls} currentRole={currentRole} onAddHall={() => setIsAddHallModalOpen(true)} onEditHall={(hall) => setEditingHall(hall)} onRequestBooking={() => setIsBookingModalOpen(true)} />;
       case 'users':
         return <UsersView users={filteredUsers} />;
       case 'bookings':
@@ -417,10 +447,49 @@ export default function App() {
                 className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent w-64"
               />
             </div>
-            <button className="relative p-2 text-gray-400 hover:text-gray-500">
-              <Bell className="h-6 w-6" />
-              <span className="absolute top-1.5 right-1.5 h-2.5 w-2.5 bg-red-500 rounded-full border-2 border-white"></span>
-            </button>
+            <div className="relative">
+              <button 
+                onClick={() => setIsNotificationsOpen(!isNotificationsOpen)} 
+                className="relative p-2 text-gray-400 hover:text-gray-500 focus:outline-none"
+              >
+                <Bell className="h-6 w-6" />
+                {currentRole === 'admin' && bookings.filter(b => b.status === "Pending" || b.status === "Pending Admin").length > 0 && (
+                  <span className="absolute top-1.5 right-1.5 h-2.5 w-2.5 bg-red-500 rounded-full border-2 border-white"></span>
+                )}
+              </button>
+
+              {isNotificationsOpen && (
+                <div className="absolute right-0 mt-2 w-80 bg-white rounded-md shadow-lg py-1 z-50 ring-1 ring-black ring-opacity-5">
+                  <div className="px-4 py-2 border-b border-gray-100 flex justify-between items-center">
+                    <h3 className="text-sm font-semibold text-gray-900">Notifications</h3>
+                    <button onClick={() => setIsNotificationsOpen(false)} className="text-gray-400 hover:text-gray-500">
+                      <XCircle className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="max-h-96 overflow-y-auto">
+                    {currentRole === 'admin' ? (
+                      bookings.filter(b => b.status === "Pending" || b.status === "Pending Admin").length > 0 ? (
+                        bookings.filter(b => b.status === "Pending" || b.status === "Pending Admin").map((booking, idx) => (
+                          <div key={idx} className="px-4 py-3 border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                            <p className="text-sm text-gray-800 font-medium">{booking.eventName}</p>
+                            <p className="text-xs text-gray-500 mt-1">Status: <span className="text-yellow-600">{booking.status}</span></p>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="px-4 py-6 text-sm text-gray-500 text-center">No pending items.</div>
+                      )
+                    ) : (
+                      <div className="px-4 py-6 text-sm text-gray-500 text-center">No new notifications.</div>
+                    )}
+                  </div>
+                  {currentRole === 'admin' && bookings.filter(b => b.status === "Pending" || b.status === "Pending Admin").length > 0 && (
+                    <div className="px-4 py-2 border-t border-gray-100 text-center">
+                      <button onClick={() => { setIsNotificationsOpen(false); setCurrentView('bookings'); }} className="text-xs font-medium text-green-600 hover:text-green-500">View All Pending Requests</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -463,6 +532,46 @@ export default function App() {
               </div>
               <div className="pt-4 flex justify-end gap-3">
                 <button type="button" onClick={() => setIsAddHallModalOpen(false)} className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                <button type="submit" className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-500">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Hall Modal */}
+      {editingHall && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+              <h3 className="text-lg font-medium text-gray-900">Edit Hall</h3>
+              <button onClick={() => setEditingHall(null)} className="text-gray-400 hover:text-gray-500">
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleEditHallSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Hall Name</label>
+                <input type="text" name="name" defaultValue={editingHall.name} required className="mt-1 block text-black w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:ring-green-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Capacity</label>
+                <input type="number" name="capacity" defaultValue={editingHall.capacity} min="1" required className="mt-1 text-black block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:ring-green-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Location (Building)</label>
+                <input type="text" name="location" defaultValue={editingHall.building} required className="mt-1 text-black block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:ring-green-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Status</label>
+                <select name="status" defaultValue={editingHall.status} className="mt-1 block text-black w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:ring-green-500">
+                  <option value="Active">Active</option>
+                  <option value="Maintenance">Maintenance</option>
+                  <option value="Inactive">Inactive</option>
+                </select>
+              </div>
+              <div className="pt-4 flex justify-end gap-3">
+                <button type="button" onClick={() => setEditingHall(null)} className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
                 <button type="submit" className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-500">Save</button>
               </div>
             </form>
@@ -649,7 +758,7 @@ function DashboardView({ halls, bookings, users, currentRole }: { halls: any[], 
   );
 }
 
-function HallsView({ halls, currentRole, onAddHall, onRequestBooking }: { halls: any[], currentRole: string, onAddHall: () => void, onRequestBooking: () => void }) {
+function HallsView({ halls, currentRole, onAddHall, onEditHall, onRequestBooking }: { halls: any[], currentRole: string, onAddHall: () => void, onEditHall: (hall: any) => void, onRequestBooking: () => void }) {
   return (
     <div className="space-y-4">
       <div className="sm:flex sm:items-center sm:justify-between">
@@ -686,7 +795,7 @@ function HallsView({ halls, currentRole, onAddHall, onRequestBooking }: { halls:
             {(currentRole === 'admin' || currentRole === 'student') && (
               <div className="bg-gray-50 px-6 py-3 border-t border-gray-200 flex justify-between items-center">
                 <span className="text-xs text-gray-500 font-mono">ID: {hall.id}</span>
-                {currentRole === 'admin' && <button className="text-sm font-medium text-green-600 hover:text-green-500">Edit Details</button>}
+                {currentRole === 'admin' && <button onClick={() => onEditHall(hall)} className="text-sm font-medium text-green-600 hover:text-green-500">Edit Details</button>}
                 {currentRole === 'student' && <button onClick={onRequestBooking} className="text-sm font-medium text-indigo-600 hover:text-indigo-500">Request Booking</button>}
               </div>
             )}
