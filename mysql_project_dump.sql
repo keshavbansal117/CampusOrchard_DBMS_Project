@@ -1,45 +1,3 @@
--- =================================================================================
--- CAMPUS ORCHARD - MySQL Database Dump (IMPROVED VERSION)
--- Improvements applied:
---   1.  INT AUTO_INCREMENT IDs (clean, no redundant Code columns)
---   2.  BookingDate added directly to Booking_Request
---   3.  Society_Member table added
---   4.  Equipment booking/availability tracking added
---   5.  StartTime < EndTime CHECK constraint enforced
---   6.  Approval.FacultyID made NOT NULL
---   7.  Admin soft-delete (is_active flag) to preserve audit trail
---   8.  Missing indexes on all FK / join columns
---   9.  sp_SubmitBooking validates EventID exists
---   10. fn_CheckAvailability includes Pending/Pending Admin (race condition fix)
---   11. Trigger added for Booking cancellation (free resource)
---   12. vw_Admin_Logs_Recent ORDER BY removed from view definition
---   13. vw_Approved_Schedule view added
---   14. Equipment.Status CHECK constraint added
---   15. UpdatedAt timestamps added to core tables
---   16. Society description & founding date added
--- ---- Round 3 Fixes ---------------------------------------------------------------
---   17. fn_CheckAvailability now uses BookingDate (not EventDate) — consistency fix
---   18. UNIQUE constraint on Approval.RequestID — prevents duplicate approvals
---   19. Equipment release trigger fixed — removed wrong Status condition
---   20. Capacity validation added in sp_SubmitBooking
---   21. Resource Status validated before booking (blocks Maintenance/Inactive)
---   22. Admin approval blocked if Faculty has not approved first (workflow integrity)
---   23. Event.SocietyID made NOT NULL (events must belong to a society)
---   24. Index added on Booking_Equipment.RequestID
---   25. Admin_Log normalized: ActionType + EntityID columns added
---   26. Equipment overlap check added in sp_SubmitBooking
--- ---- Round 5 Fixes ---------------------------------------------------------------
---   27. Equipment.Status includes 'Reserved' — set explicitly via sp_AddBookingEquipment
---   28. Equipment overlap logic fixed — checks per specific EquipmentID, not all on resource
---   29. Admin cannot overwrite a final decision — sp_VerifyBooking blocks non-Pending Admin state
---   30. trg_Booking_Status_Change — resets Reserved → Working on Approved/Rejected
--- ---- Round 6 Fix ----------------------------------------------------------------
---   31. Option A implemented — only the Student Secretary of a society can submit
---       a booking request; SubmittedByStudentID added to Booking_Request with
---       FK → Student (ON DELETE RESTRICT); secretary validated in sp_SubmitBooking
---   32. Queries section removed (schema-only file)
--- =================================================================================
-
 
 -- =================================================================================
 -- SECTION 1: CORE ENTITY TABLES
@@ -66,29 +24,24 @@ CREATE TABLE Faculty (
     UpdatedAt   TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
--- Admins use soft-delete (is_active) to preserve audit trail integrity
 CREATE TABLE Admin (
     AdminID   INT AUTO_INCREMENT PRIMARY KEY,
     Name      VARCHAR(100) NOT NULL,
     Email     VARCHAR(100) UNIQUE NOT NULL,
-    is_active TINYINT(1) NOT NULL DEFAULT 1,     -- 0 = soft-deleted, logs still intact
+    is_active TINYINT(1) NOT NULL DEFAULT 1, 
     CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UpdatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
--- Admin Logs: ON DELETE RESTRICT prevents losing accountability
--- (Admins must be soft-deleted, never hard-deleted)
--- Normalized: ActionType is a queryable category; Details holds extra context; EntityID links to affected row
 CREATE TABLE Admin_Log (
     LogID      INT AUTO_INCREMENT PRIMARY KEY,
     AdminID    INT NOT NULL,
-    ActionType VARCHAR(50) NOT NULL,                 -- e.g. 'APPROVE', 'REJECT', 'UPDATE_RESOURCE', 'DEACTIVATE_ADMIN'
-    EntityID   INT,                                  -- ID of the affected row (ApprovalID, ResourceID, etc.)
-    Details    VARCHAR(255),                         -- Optional extra context / notes
+    ActionType VARCHAR(50) NOT NULL,                 
+    EntityID   INT,                                  
+    Details    VARCHAR(255),                        
     ActionTime DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (AdminID) REFERENCES Admin(AdminID) ON DELETE RESTRICT
 );
-
 
 -- =================================================================================
 -- SECTION 2: SOCIETY & MEMBERSHIP
@@ -107,11 +60,10 @@ CREATE TABLE Society (
     FOREIGN KEY (StudentSecretaryID) REFERENCES Student(StudentID) ON DELETE SET NULL
 );
 
--- Tracks which students belong to which society and in what role
 CREATE TABLE Society_Member (
     SocietyID  INT NOT NULL,
     StudentID  INT NOT NULL,
-    Role       VARCHAR(50) NOT NULL DEFAULT 'Member',   -- e.g. Member, Coordinator, Treasurer
+    Role       VARCHAR(50) NOT NULL DEFAULT 'Member',
     JoinedDate DATE NOT NULL,
     PRIMARY KEY (SocietyID, StudentID),
     FOREIGN KEY (SocietyID) REFERENCES Society(SocietyID) ON DELETE CASCADE,
@@ -126,7 +78,7 @@ CREATE TABLE Society_Member (
 CREATE TABLE Event (
     EventID           INT AUTO_INCREMENT PRIMARY KEY,
     Name              VARCHAR(150) NOT NULL,
-    SocietyID         INT NOT NULL,                      -- Every event must belong to a society
+    SocietyID         INT NOT NULL,                   
     EventDate         DATE NOT NULL,
     ExpectedAttendees INT CHECK (ExpectedAttendees > 0),
     CreatedAt         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -142,7 +94,7 @@ CREATE TABLE Event (
 CREATE TABLE Resource (
     ResourceID        INT AUTO_INCREMENT PRIMARY KEY,
     Name              VARCHAR(100) NOT NULL,
-    Type              VARCHAR(50),                  -- e.g. Auditorium, Lab, Seminar Hall
+    Type              VARCHAR(50),            
     Capacity          INT CHECK (Capacity > 0),
     Location          VARCHAR(100),
     Status            VARCHAR(20) DEFAULT 'Active'
@@ -153,7 +105,6 @@ CREATE TABLE Resource (
     FOREIGN KEY (UpdatedByAdminID) REFERENCES Admin(AdminID) ON DELETE SET NULL
 );
 
--- Equipment now tracks individual check-out/return per booking
 CREATE TABLE Equipment (
     EquipmentID INT AUTO_INCREMENT PRIMARY KEY,
     Name        VARCHAR(100) NOT NULL,
@@ -165,7 +116,6 @@ CREATE TABLE Equipment (
     FOREIGN KEY (ResourceID) REFERENCES Resource(ResourceID) ON DELETE CASCADE
 );
 
--- Links specific equipment items to a booking request
 CREATE TABLE Booking_Equipment (
     BookingEquipID INT AUTO_INCREMENT PRIMARY KEY,
     RequestID      INT NOT NULL,
@@ -184,7 +134,7 @@ CREATE TABLE Booking_Request (
     RequestID           INT AUTO_INCREMENT PRIMARY KEY,
     EventID             INT NOT NULL,
     ResourceID          INT NOT NULL,
-    SubmittedByStudentID INT NOT NULL,               -- Must be the society's designated secretary
+    SubmittedByStudentID INT NOT NULL,               
     BookingDate         DATE NOT NULL,
     StartTime           TIME NOT NULL,
     EndTime             TIME NOT NULL,
@@ -207,9 +157,9 @@ CREATE TABLE Booking_Request (
 
 CREATE TABLE Approval (
     ApprovalID   INT AUTO_INCREMENT PRIMARY KEY,
-    RequestID    INT NOT NULL UNIQUE,                    -- One approval record per booking only
+    RequestID    INT NOT NULL UNIQUE,                   
     FacultyID    INT NOT NULL,
-    AdminID      INT,                                -- Filled in at Step 2
+    AdminID      INT,                      
     Status       VARCHAR(20)
                      CHECK (Status IN ('Faculty Approved', 'Approved', 'Rejected')),
     Comments     TEXT,
@@ -258,7 +208,6 @@ CREATE INDEX idx_member_student ON Society_Member(StudentID);
 -- SECTION 8: VIEWS
 -- =================================================================================
 
--- Pending approvals (both Faculty-pending and Admin-pending)
 CREATE VIEW vw_Pending_Approvals AS
 SELECT
     br.RequestID,
@@ -279,7 +228,6 @@ JOIN Student  st ON br.SubmittedByStudentID = st.StudentID
 WHERE br.Status IN ('Pending', 'Pending Admin');
 
 
--- Recent admin logs (ORDER BY at query time, not in view)
 CREATE VIEW vw_Admin_Logs AS
 SELECT
     l.LogID,
@@ -290,10 +238,8 @@ SELECT
     l.ActionTime
 FROM Admin_Log l
 JOIN Admin a ON l.AdminID = a.AdminID;
--- Usage: SELECT * FROM vw_Admin_Logs ORDER BY ActionTime DESC LIMIT 100;
 
 
--- Approved bookings schedule
 CREATE VIEW vw_Approved_Schedule AS
 SELECT
     br.RequestID,
@@ -315,7 +261,7 @@ JOIN Student  st ON br.SubmittedByStudentID = st.StudentID
 WHERE br.Status = 'Approved';
 
 
--- Society membership overview
+
 CREATE VIEW vw_Society_Members AS
 SELECT
     s.Name     AS SocietyName,
@@ -329,7 +275,6 @@ JOIN Society s  ON sm.SocietyID = s.SocietyID
 JOIN Student st ON sm.StudentID = st.StudentID;
 
 
--- Change Delimiter for PL/SQL constructs
 DELIMITER //
 
 
@@ -337,10 +282,6 @@ DELIMITER //
 -- SECTION 9: FUNCTIONS
 -- =================================================================================
 
--- fn_CheckAvailability
--- FIX 17: Uses br.BookingDate directly (not EventDate via JOIN) — consistency fix.
--- FIX 10: Blocks on Pending + Pending Admin + Approved to prevent race conditions.
-CREATE FUNCTION fn_CheckAvailability(
     p_ResourceID INT,
     p_Date       DATE,
     p_StartTime  TIME,
@@ -353,7 +294,7 @@ BEGIN
     SELECT COUNT(*) INTO conflict_count
     FROM Booking_Request br
     WHERE br.ResourceID  = p_ResourceID
-      AND br.BookingDate = p_Date                              -- uses BookingDate directly
+      AND br.BookingDate = p_Date                             
       AND br.Status IN ('Pending', 'Pending Admin', 'Approved')
       AND (p_StartTime < br.EndTime AND p_EndTime > br.StartTime);
 
@@ -365,15 +306,6 @@ END //
 -- SECTION 10: STORED PROCEDURES & TRANSACTIONS
 -- =================================================================================
 
--- sp_SubmitBooking
--- OPTION A: Only the designated Student Secretary of the society can submit a booking.
--- Validation chain:
---   1. StartTime < EndTime sanity check
---   2. Resource must be Active
---   3. Event must exist
---   4. Submitting student must be the secretary of the event's society
---   5. ExpectedAttendees must not exceed Resource.Capacity
---   6. No time conflict on the resource (fn_CheckAvailability)
 CREATE PROCEDURE sp_SubmitBooking(
     IN p_EventID             INT,
     IN p_ResourceID          INT,
@@ -468,10 +400,6 @@ BEGIN
 END //
 
 
--- sp_AddBookingEquipment
--- Reserves a specific equipment item for a booking.
--- FIX 2: Overlap check is now per EquipmentID (not all equipment on resource).
--- FIX 1: Sets Equipment.Status = 'Reserved' explicitly when linked to a booking.
 CREATE PROCEDURE sp_AddBookingEquipment(
     IN p_RequestID   INT,
     IN p_EquipmentID INT
@@ -515,7 +443,7 @@ BEGIN
             SET MESSAGE_TEXT = 'Equipment is not available (Reserved, Damaged, or Under Repair).';
     END IF;
 
-    -- FIX 2: Check overlap for THIS specific equipment only
+    -- Check overlap for THIS specific equipment only
     SELECT COUNT(*) INTO v_Conflict
     FROM Booking_Equipment be
     JOIN Booking_Request   br ON be.RequestID = br.RequestID
@@ -568,15 +496,12 @@ BEGIN
     INSERT INTO Approval (RequestID, FacultyID, Status, Comments)
     VALUES (p_RequestID, p_FacultyID, p_Decision, p_Comments);
 
-    -- Trigger trg_After_Approval_Merge will sync Booking_Request.Status automatically
     COMMIT;
     SELECT CONCAT('Faculty decision recorded: ', p_Decision) AS Message;
 END //
 
 
 -- sp_VerifyBooking: Step 2 — Admin final verification
--- FIX 22: Admin approval is blocked if Booking_Request is not in 'Pending Admin'
---         status (i.e. faculty must have approved first).
 CREATE PROCEDURE sp_VerifyBooking(
     IN p_ApprovalID INT,
     IN p_AdminID    INT,
@@ -611,8 +536,8 @@ BEGIN
             SET MESSAGE_TEXT = 'Approval record not found.';
     END IF;
 
-    -- FIX 22: Ensure booking is in 'Pending Admin' state (faculty approved first)
-    -- FIX 3:  Block if approval already has a final decision (Approved or Rejected)
+    -- Ensure booking is in 'Pending Admin' state (faculty approved first)
+    -- Block if approval already has a final decision (Approved or Rejected)
     SELECT Status INTO v_BookingStatus
     FROM Booking_Request
     WHERE RequestID = v_RequestID;
@@ -633,13 +558,12 @@ BEGIN
     VALUES (p_AdminID, 'APPROVE', p_ApprovalID,
             CONCAT('Status set to: ', p_Status));
 
-    -- Trigger trg_After_Approval_Update syncs Booking_Request.Status automatically
     COMMIT;
     SELECT CONCAT('Admin verification recorded: ', p_Status) AS Message;
 END //
 
 
--- sp_UpdateResource: Admin updates a resource and auto-logs via trigger
+
 CREATE PROCEDURE sp_UpdateResource(
     IN p_ResourceID INT,
     IN p_AdminID    INT,
@@ -661,16 +585,15 @@ BEGIN
         UpdatedByAdminID = p_AdminID
     WHERE ResourceID = p_ResourceID;
 
-    -- trg_Log_Resource_Update fires automatically after this UPDATE
     COMMIT;
     SELECT 'Resource updated successfully.' AS Message;
 END //
 
 
--- sp_SoftDeleteAdmin: Deactivates an admin without deleting log records
+
 CREATE PROCEDURE sp_SoftDeleteAdmin(
     IN p_AdminID      INT,
-    IN p_RequestorID  INT    -- Admin performing the action (for audit)
+    IN p_RequestorID  INT   
 )
 BEGIN
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -695,9 +618,6 @@ END //
 -- SECTION 11: TRIGGERS
 -- =================================================================================
 
--- trg_After_Approval_Merge
--- Syncs Booking_Request.Status when Approval row is inserted or updated.
--- Covers both Faculty (Step 1) and Admin (Step 2) decisions.
 CREATE TRIGGER trg_After_Approval_Insert
 AFTER INSERT ON Approval
 FOR EACH ROW
@@ -737,8 +657,6 @@ BEGIN
 END //
 
 
--- trg_Log_Resource_Update
--- Auto-logs any resource status/location change via Admin.
 CREATE TRIGGER trg_Log_Resource_Update
 AFTER UPDATE ON Resource
 FOR EACH ROW
@@ -753,22 +671,17 @@ BEGIN
 END //
 
 
--- trg_Booking_Status_Change
--- FIX 19: Equipment is released on rejection regardless of its current Status.
--- FIX 1:  Equipment marked 'Reserved' is reset to 'Working' when booking is
---         Rejected OR Approved (approved = event happened, equipment is free again).
---         Damaged/Under Repair items are never touched by this trigger.
 CREATE TRIGGER trg_Booking_Status_Change
 AFTER UPDATE ON Booking_Request
 FOR EACH ROW
 BEGIN
-    -- Release equipment back to Working when booking reaches a terminal state
+    
     IF (NEW.Status IN ('Rejected', 'Approved')) AND OLD.Status != NEW.Status THEN
         UPDATE Equipment e
         JOIN Booking_Equipment be ON e.EquipmentID = be.EquipmentID
         SET e.Status = 'Working'
         WHERE be.RequestID = NEW.RequestID
-          AND e.Status = 'Reserved';   -- only reset Reserved items; leave Damaged/Under Repair alone
+          AND e.Status = 'Reserved';   
     END IF;
 END //
 
@@ -838,6 +751,4 @@ INSERT INTO Booking_Request (EventID, ResourceID, SubmittedByStudentID, BookingD
 INSERT INTO Approval (RequestID, FacultyID, Status, Comments) VALUES
     (1, 1, 'Faculty Approved', 'Looks good, approved for Tech Fest.');
 
--- =================================================================================
--- END OF SCRIPT
--- =================================================================================
+
